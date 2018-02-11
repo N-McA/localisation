@@ -82,13 +82,19 @@ def path_batch_generator(paths, batch_size):
         np.random.shuffle(paths)
 
 
+cache = CachingImageIterator(
+    paths=train_paths,
+    cache_path='/local/sdd/nm583/caches/kitti-cache',
+    image_type='jpg',
+    storage_size=kitti_image_shape,
+)
+
+
+def get_img(path):
+    return cache.cached_fetch(path)
+
+
 def training_generator(paths, n_positives, relation):
-    cache = CachingImageIterator(
-        paths=train_paths,
-        cache_path='/local/sdd/nm583/caches/kitti-cache',
-        image_type='jpg',
-        storage_size=kitti_image_shape,
-    )
     for path_batch in path_batch_generator(paths, n_positives):
         positives_a = []
         positives_b = []
@@ -101,8 +107,8 @@ def training_generator(paths, n_positives, relation):
         images_a = np.zeros([b, *kitti_image_shape, 3])
         images_b = np.zeros([b, *kitti_image_shape, 3])
         for i, (pa, pb) in enumerate(zip(positives_a, positives_b)):
-            images_a[i] = cache.augment(cache.cached_fetch(pa))
-            images_b[i] = cache.augment(cache.cached_fetch(pb))
+            images_a[i] = cache.augment(get_img(pa))
+            images_b[i] = cache.augment(get_img(pb))
 
         m = np.zeros([len(positives_a), len(positives_b)])
         for i, path_a in enumerate(positives_a):
@@ -113,7 +119,7 @@ def training_generator(paths, n_positives, relation):
         yield [images_a, images_b], m
 
 
-n_bits = 100
+embedding_size = 100
 
 mobile_net_model = MobileNet(
     input_shape=[*kitti_image_shape, 3],
@@ -126,7 +132,7 @@ embedding_net = embedding_net_input
 embedding_net = mobile_net_model(embedding_net_input)
 embedding_net = GlobalAveragePooling2D()(embedding_net)
 embedding_net = Dense(
-    n_bits, activation='linear'
+    embedding_size, activation='linear'
 )(embedding_net)
 embedding_model = Model([embedding_net_input], [embedding_net])
 
@@ -138,12 +144,18 @@ input_a_embedded = embedding_model(input_a)
 input_b_embedded = embedding_model(input_b)
 
 
+def all_prods(a, b):
+    return tf.expand_dims(a, axis=1) * tf.expand_dims(b, axis=0)
+
+
 def all_dot_prods(a, b):
-    return tf.reduce_sum(tf.expand_dims(a, axis=1) * tf.expand_dims(b, axis=0), axis=-1)
+    all_dot_prods = tf.reduce_sum(all_prods(a, b), axis=-1)
+    all_norm_prods = all_prods(tf.norm(a, axis=-1), tf.norm(b, axis=-1))
+    return all_dot_prods / all_norm_prods
 
 
 pairwise_dot_prods = Lambda(lambda ab: all_dot_prods(*ab))([input_a_embedded, input_b_embedded])
-pairwise_dot_prods = LearnScale(0.01)(pairwise_dot_prods)
+pairwise_dot_prods = LearnScale(1.0)(pairwise_dot_prods)
 sigma_pairwise_dot_prods = Activation('sigmoid')(pairwise_dot_prods)
 
 pairwise_model = Model(
@@ -158,11 +170,36 @@ pairwise_model.compile(opt, loss='binary_crossentropy')
 relation = path_graph
 tg = training_generator(
         paths=list(relation.keys()),
-        n_positives=6,
+        n_positives=32,
         relation=relation,
 )
 
 pairwise_model.fit_generator(tg, steps_per_epoch=len(relation), epochs=1)
+
+# fix
+validation_paths = list(relation.keys())
+query_paths = validation_paths[:100]
+path_to_index = {p: i for i, p in enumerate(validation_paths)}
+embeddings = np.zeros([len(validation_paths), embedding_size])
+for i, path in enumerate(validation_paths):
+    embeddings[i] = embedding_model.predict(np.array([get_img(path)]))
+
+def search(path):
+    idx = path_to_index[path]
+    close_indexes = np.argsort(-np.sum(embeddings[idx] * embeddings, axis=-1))[1:11]
+    return [validation_paths[i] for i in close_indexes]
+
+print(validation_paths[0], search(validation_paths[0]))
+
+gt_results = []
+pred_results = []
+for p in query_paths:
+    pred_results.append(search(p))
+    gt_results.append(list(relation[p]))
+
+from utils import mapk
+print(mapk(gt_results, pred_results))
+
 #  for x, y in tg:
 #      print(pairwise_model.predict(x))
 #      break
