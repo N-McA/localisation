@@ -13,4 +13,7 @@ class ModelCheckpoint(keras.callbacks.ModelCheckpoint):
 
     def on_epoch_end(self, epoch, logs=None):
         self.set_model(self.passed_model)
+        for layer in self.model.layers:
+            if hasattr(layer, 'kernel_intializer'):
+                layer.kernel_intializer = None
         super().on_epoch_end(epoch, logs)

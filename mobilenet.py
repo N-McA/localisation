@@ -477,6 +477,11 @@ def MobileNet(input_shape=None,
 
     assert not include_top
 
+    if pooling == 'avg':
+        x = GlobalAveragePooling2D()(x)
+    elif pooling == 'max':
+        x = GlobalMaxPooling2D()(x)
+
     # Ensure that the model takes into account
     # any potential predecessors of `input_tensor`.
     if input_tensor is not None:

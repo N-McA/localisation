@@ -4,7 +4,8 @@ import utils
 from callbacks import ModelCheckpoint
 from mobilenet import MobileNet
 import constants
-from constants import data_loc, train_proportion, kitti_image_shape
+from constants import data_loc, train_proportion, kitti_image_shape, embedding_size
+
 from layers import LearnScale
 
 import numpy as np
@@ -15,7 +16,7 @@ import keras
 from keras.models import Model
 from keras.layers import (
         Dense, Input, Lambda,
-        Activation
+        Activation, BatchNormalization
 )
 from keras.layers import GlobalAveragePooling2D
 
@@ -34,7 +35,6 @@ with (data_loc / 'graph.pickle').open('rb') as f:
 
 with (data_loc / 'loop_closure_graph.pickle').open('rb') as f:
     loop_closure_graph = pickle.load(f)
-
 all_train_paths = utils.load_paths(data_loc / 'train_paths.txt')
 test_paths = utils.load_paths(data_loc / 'test_paths.txt')
 
@@ -92,29 +92,42 @@ def batch_generator(paths, n_positives, relation):
         yield [images_a, images_b], m
 
 
-embedding_size = 100
-
 mobile_net_model = MobileNet(
     input_shape=[*kitti_image_shape, 3],
     include_top=False,
-    weights='imagenet'
+    weights='imagenet',
+    pooling='avg',
 )
+
+for layer in mobile_net_model.layers:
+    layer.trainable = False
 
 embedding_net_input = Input([*kitti_image_shape, 3], dtype=np.float32)
 embedding_net = embedding_net_input
 embedding_net = mobile_net_model(embedding_net_input)
-embedding_net = GlobalAveragePooling2D()(embedding_net)
-embedding_net = Dense(
-    embedding_size, activation='linear'
-)(embedding_net)
+embedding_net = BatchNormalization(scale=False)(embedding_net)
+embedding_dense_layer = Dense(
+    embedding_size, activation='linear',
+)
+embedding_net = embedding_dense_layer(embedding_net)
 embedding_model = Model([embedding_net_input], [embedding_net])
-
 
 input_a = Input([*kitti_image_shape, 3])
 input_b = Input([*kitti_image_shape, 3])
 
 input_a_embedded = embedding_model(input_a)
 input_b_embedded = embedding_model(input_b)
+
+
+# Pre-processing to compute init.
+preproc_paths = np.random.choice(train_paths, len(train_paths))
+imgs = np.array([get_img(p) for p in train_paths])
+embeds = mobile_net_model.predict(imgs)
+from sklearn.decomposition import PCA
+pca = PCA(embedding_size)
+pca_init = pca.fit(embeds)
+embedding_dense_layer.set_weights([pca.components_.T, np.zeros(embedding_size)])
+
 
 
 def all_prods(a, b):
@@ -130,7 +143,8 @@ def all_cosines(a, b):
 pairwise_cosines = Lambda(lambda ab: all_cosines(*ab))([
     input_a_embedded, input_b_embedded
 ])
-pairwise_cosines = LearnScale(1.0)(pairwise_cosines)
+scale_layer = LearnScale(0.6)
+pairwise_cosines = scale_layer(pairwise_cosines)
 sigma_pairwise_cosines = Activation('sigmoid')(pairwise_cosines)
 
 pairwise_model = Model(
@@ -141,6 +155,8 @@ pairwise_model = Model(
 # opt = keras.optimizers.Adam(amsgrad=True)
 opt = keras.optimizers.RMSprop()
 pairwise_model.compile(opt, loss='binary_crossentropy')
+
+#  embedding_dense_layer.set_weights([np.eye(1024), np.zeros(1024)])
 
 relation = path_graph
 tg = batch_generator(
@@ -156,16 +172,17 @@ vg = batch_generator(
 )
 
 
+def print_scale(a, b):
+    print(scale_layer.get_weights())
+
+
 pairwise_model.fit_generator(
         tg,
-        #  steps_per_epoch=len(train_relation),
-        steps_per_epoch=10,
-        epochs=2,
+        steps_per_epoch=len(train_relation),
+        epochs=10,
         validation_data=vg,
         validation_steps=100,
-        callbacks=[ModelCheckpoint(data_loc / 'weights', embedding_model)]
-        )
-
-
-
-
+        callbacks=[
+            ModelCheckpoint(data_loc / 'weights', embedding_model),
+        ]
+)
