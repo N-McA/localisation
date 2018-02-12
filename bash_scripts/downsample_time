@@ -1,0 +1,7 @@
+#!/bin/bash
+mkdir -p image_2_downsampled_in_time
+FNAMES=$(ls image_2 | sort -V | awk 'NR == 0 || (NR - 1) % 5 == 0')
+for i in $FNAMES; do
+	cp image_2/$i image_2_downsampled_in_time/.
+done
+

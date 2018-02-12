@@ -1,0 +1,32 @@
+#!/bin/bash
+set -e
+
+# I detest bash.
+# 00 is removed here...
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
+  DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+
+
+SEQ_LOC="/local/sdd/nm583/kitti/dataset/sequences"
+
+for n in 01 02 03 04 05 06 07 08 09 10; do
+  cd $SEQ_LOC/$n
+  mkdir -p colmap
+  $SCRIPT_DIR/downsample_time
+  colmap feature_extractor --project_path=$SCRIPT_DIR/feature_extractor.ini
+done
+
+python $SCRIPT_DIR/../populate_colmap_locations.py
+
+for n in 01 02 03 04 05 06 07 08 09 10; do
+  cd $SEQ_LOC/$n
+  colmap spatial_matcher --project_path=$SCRIPT_DIR/spatial_matcher.ini
+  colmap transitive_matcher --project_path=$SCRIPT_DIR/transitive_matcher.ini
+done
+

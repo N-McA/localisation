@@ -1,5 +1,6 @@
 
 import numpy as np
+from pathlib import Path
 
 
 def mapk(ground_truth, predicted, k=10):
@@ -22,3 +23,12 @@ def apk(actual, predicted, k=10):
         return 0.0
 
     return score / min(len(actual), k)
+
+
+def load_paths(loc):
+    loc = Path(loc)
+    paths = []
+    with loc.open() as f:
+        for line in f:
+            paths.append(Path(line.strip()))
+    return paths
