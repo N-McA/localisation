@@ -490,7 +490,7 @@ def MobileNet(input_shape=None,
         inputs = img_input
 
     # Create model.
-    rows = 128
+    rows = 224
     model = Model(inputs, x, name='mobilenet_%0.2f_%s' % (alpha, rows))
 
     # load weights

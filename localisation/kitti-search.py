@@ -16,7 +16,7 @@ import keras
 from keras.models import Model
 from keras.layers import (
         Dense, Input, Lambda,
-        Activation, BatchNormalization
+        Activation, BatchNormalization, LeakyReLU
 )
 from keras.layers import GlobalAveragePooling2D
 
@@ -106,10 +106,13 @@ embedding_net_input = Input([*kitti_image_shape, 3], dtype=np.float32)
 embedding_net = embedding_net_input
 embedding_net = mobile_net_model(embedding_net_input)
 embedding_net = BatchNormalization(scale=False)(embedding_net)
-embedding_dense_layer = Dense(
+embedding_net = Dense(
+    embedding_size*2, activation='linear'
+)(embedding_net)
+embedding_net = LeakyReLU(0.1)(embedding_net)
+embedding_net = Dense(
     embedding_size, activation='linear',
-)
-embedding_net = embedding_dense_layer(embedding_net)
+)(embedding_net)
 embedding_model = Model([embedding_net_input], [embedding_net])
 
 input_a = Input([*kitti_image_shape, 3])
@@ -120,13 +123,13 @@ input_b_embedded = embedding_model(input_b)
 
 
 # Pre-processing to compute init.
-preproc_paths = np.random.choice(train_paths, len(train_paths))
-imgs = np.array([get_img(p) for p in train_paths])
-embeds = mobile_net_model.predict(imgs)
-from sklearn.decomposition import PCA
-pca = PCA(embedding_size)
-pca_init = pca.fit(embeds)
-embedding_dense_layer.set_weights([pca.components_.T, np.zeros(embedding_size)])
+#  preproc_paths = np.random.choice(train_paths, len(train_paths))
+#  imgs = np.array([get_img(p) for p in train_paths])
+#  embeds = mobile_net_model.predict(imgs)
+#  from sklearn.decomposition import PCA
+#  pca = PCA(embedding_size)
+#  pca_init = pca.fit(embeds)
+#  embedding_dense_layer.set_weights([pca.components_.T, np.zeros(embedding_size)])
 
 
 
@@ -136,8 +139,8 @@ def all_prods(a, b):
 
 def all_cosines(a, b):
     all_dot_prods = tf.reduce_sum(all_prods(a, b), axis=-1)
-    all_norm_prods = all_prods(tf.norm(a, axis=-1), tf.norm(b, axis=-1))
-    return all_dot_prods / all_norm_prods
+    #all_norm_prods = all_prods(tf.norm(a, axis=-1), tf.norm(b, axis=-1))
+    return all_dot_prods #/ all_norm_prods
 
 
 pairwise_cosines = Lambda(lambda ab: all_cosines(*ab))([
