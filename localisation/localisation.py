@@ -27,14 +27,20 @@ import tensorflow as tf
 from keras.backend.tensorflow_backend import set_session
 
 image_shape = 224, 224
-TRAIN_CITY = 'ROME'
+TRAIN_CITY = 'DUBROVNIK'
 
 if TRAIN_CITY == 'DUBROVNIK':
     geo_locs = cvg.get_dubrovnik_geo_locs()
     whole_relation = cvg.get_dubrovnik_relation()
 if TRAIN_CITY == 'ROME':
-    geo_locs = cvg.get_dubrovnik_geo_locs()
-    whole_relation = cvg.get_dubrovnik_relation()
+    geo_locs = cvg.get_rome_geo_locs()
+    whole_relation = cvg.get_rome_relation()
+    # There's one pesky bad image...
+    bad = Path('/home/nm583/sfm_data/Rome16K/db/7504080@N05_2397193450.jpg')
+    del whole_relation[bad]
+    for neighs in whole_relation.values():
+        if bad in neighs:
+            neighs.remove(bad)
 
 
 # So we can see memory usage...
@@ -57,14 +63,16 @@ for path in train_paths:
 close_relation = defaultdict(set)     
 for p1, neighs in whole_relation.items():
     for p2 in neighs:
-        if np.linalg.norm(geo_locs[p1] - geo_locs[p2]) < 20:
+        if np.linalg.norm(geo_locs[p1] - geo_locs[p2]) < 5:
             close_relation[p1].add(p2)  
     
 close_train_relation = defaultdict(set)     
 for p1, neighs in train_relation.items():
     for p2 in neighs:
-        if np.linalg.norm(geo_locs[p1] - geo_locs[p2]) < 20:
+        if np.linalg.norm(geo_locs[p1] - geo_locs[p2]) < 5:
             close_train_relation[p1].add(p2) 
+
+print('close train relation length', len(close_train_relation))
 
 
 def path_batch_generator(paths, batch_size):
@@ -84,20 +92,21 @@ def get_img(path):
 
 def batch_generator(paths, n_locs, n_per_loc, sample_relation, relation):
     # not satisfactory...
-    choosable_relation = {k: list(ns) for k, ns in sample_relation.items()}
+    choosable_relation = {k: list(ns - set([k])) for k, ns in sample_relation.items()}
     for path_batch in path_batch_generator(paths, n_locs):
         full_batch = []
         for path in path_batch:
-            neighs = choosable_relation[path]
-            if len(neighs) > 0:
-                full_batch.append(path)
-                n = min(n_per_loc, len(neighs))
-                full_batch += list(np.random.choice(neighs, size=n))
+            if path in choosable_relation:
+                neighs = choosable_relation[path]
+                if len(neighs) > 0:
+                    full_batch.append(path)
+                    n = min(n_per_loc, len(neighs))
+                    full_batch += list(np.random.choice(neighs, size=n))
         images = np.zeros([len(full_batch), *image_shape, 3])
         for i, p in enumerate(full_batch):
             try:
                 images[i] = get_img(p)
-            except ValueError as e:
+            except Exception as e:
                 print(p)
                 print(e)
 
@@ -115,6 +124,7 @@ mobile_net_model = MobileNet(
     include_top=False,
     weights='imagenet',
     pooling='avg',
+    alpha=0.5,
 )
 
 # for layer in mobile_net_model.layers:
@@ -160,7 +170,8 @@ def batch_hard(positive_mask, dists):
         diff = furthest_positive - closest_negative
         # margin = 0.5
         # return tf.maximum(diff + margin, 0.0)        
-        return tf.nn.softplus(diff)
+        margin = 0.05
+        return tf.nn.softplus(diff + margin)
 
 
 pair_net_input = Input([*image_shape, 3])
@@ -217,8 +228,8 @@ if __name__ == '__main__':
             validation_data=vg,
             validation_steps=100,
             callbacks=[
-                ModelCheckpoint('/home/nm583/sfm_data/weights', embedding_model),
+                ModelCheckpoint('/local/scratch/nm583/sfm_data/weights', embedding_model),
                 DubrovnikEvalCallback(embedding_model),
-                CSVLoggingCallback(Path('~/sfm_data/log.ndjson').expanduser())
+                CSVLoggingCallback(Path('/local/scratch/nm583/sfm_data/log.ndjson').expanduser())
             ]
     )

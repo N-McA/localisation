@@ -160,7 +160,57 @@ def evaluate_results_dict_dubrovnik(results):
         excluded_paths=set()
     )
 
+
+def evaluate_angles_results_dict_dubrovnik(results):
+
+    path_to_mat = cvg.get_dubrovnik_geo_locs(return_homo_mats=True)
+    mats = np.array([v for k, v in sorted(list(path_to_mat.items()))])
+    paths = np.array([k for k, v in sorted(list(path_to_mat.items()))])
+
+    def un_homo(x):
+        return x[:, :-1] / x[:, -1][:, np.newaxis]
+
+    positions = []
+    look_points = []
+    camera_at = np.array([0, 0, 0, 1])
+    looking_at = np.array([0, 0, -100, 1])
+    bottom_row = np.array([0, 0, 0, 1])
+    for m in mats:
+        m = np.vstack([m, bottom_row])
+        camera_to_world = np.linalg.inv(m)
+        positions.append(camera_to_world @ camera_at)
+        look_points.append(camera_to_world @ looking_at)
+    positions = un_homo(np.array(positions))
+    look_points = un_homo(np.array(look_points))
+
+    path_to_look_vector = {}
+    for path, position, look_point in zip(paths, positions, look_points):
+        lv = look_point - position
+        lv /= np.linalg.norm(lv)
+        path_to_look_vector[path] = lv
+    
+    def angle_between_two_paths(path_a, path_b):
+        lva, lvb = path_to_look_vector[path_a], path_to_look_vector[path_b]
+        dp = lva @ lvb
+        if dp > 1:
+            return 0
+        if dp < -1:
+            return np.pi
+        return np.rad2deg(np.arccos(dp))
+
+    angles = []
+    for query, returned_paths in results.items():
+        angles.append(angle_between_two_paths(query, returned_paths[0]))
+    return np.array(angles)
+
+
 def evaluate_pte_dubrovnik(paths_to_embedding_f):
+    query_to_results = \
+        get_results_dict_from_embedding_f(paths_to_embedding_f)   
+    return evaluate_results_dict_dubrovnik(query_to_results)
+
+
+def get_results_dict_from_embedding_f(paths_to_embedding_f):
     query_paths = cvg.get_dubrovnik_query_paths()
     db_paths = cvg.get_dubrovnik_db_paths()
     db_features = paths_to_embedding_f(db_paths)
@@ -172,9 +222,8 @@ def evaluate_pte_dubrovnik(paths_to_embedding_f):
     top_k_idxs = knn.kneighbors(query_features, return_distance=False)
     query_to_results = {}
     for q, idxs in zip(query_paths, top_k_idxs):
-        query_to_results[q] = [db_paths[idx] for idx in idxs]   
-
-    return evaluate_results_dict_dubrovnik(query_to_results)
+        query_to_results[q] = [db_paths[idx] for idx in idxs]
+    return query_to_results
 
 
 def evaluate_untuned_mobilenet():
